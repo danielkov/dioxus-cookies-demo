@@ -1,3 +1,5 @@
+use std::str::FromStr;
+
 use dioxus::prelude::*;
 
 #[derive(Debug, Clone, Routable, PartialEq)]
@@ -51,6 +53,7 @@ fn Home() -> Element {
     rsx! {
         Hero {}
         Echo {}
+        Cookie {}
     }
 }
 
@@ -126,8 +129,75 @@ fn Echo() -> Element {
     }
 }
 
+#[component]
+fn Cookie() -> Element {
+    let mut response = use_signal(|| String::new());
+
+    rsx! {
+        div {
+            id: "cookie",
+            h4 { "ServerFn Cookie" }
+            button {
+                onclick: move |_| async move {
+                    let data = cookie_server().await.unwrap();
+                    response.set(data);
+                },
+                "Set Cookie"
+            }
+
+            if !response().is_empty() {
+                p {
+                    "Server cookied: "
+                    i { "{response}" }
+                }
+            }
+        }
+    }
+}
+
 /// Echo the user input on the server.
 #[server(EchoServer)]
 async fn echo_server(input: String) -> Result<String, ServerFnError> {
     Ok(input)
+}
+
+#[derive(Debug, Clone)]
+pub enum Error {
+    ServerError(String),
+}
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::ServerError(msg) => write!(f, "Server error: {}", msg),
+        }
+    }
+}
+
+impl FromStr for Error {
+    type Err = Self;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(Error::ServerError(s.to_string()))
+    }
+}
+
+#[server(CookieServer)]
+#[middleware(tower_cookies::CookieManagerLayer::new())]
+async fn cookie_server() -> Result<String, ServerFnError<Error>> {
+    let cookie_jar: tower_cookies::Cookies = extract().await.map_err(|_| {
+        ServerFnError::ServerError::<Error>("Failed to extract cookies".to_string())
+    })?;
+    let cookie = cookie_jar.get("cookie_name").map(|c| c.value().to_string());
+    if cookie.is_none() {
+        cookie_jar.add(
+            tower_cookies::Cookie::build(("cookie_name", "cookie_value"))
+                .http_only(true)
+                .secure(true)
+                .same_site(tower_cookies::cookie::SameSite::Strict)
+                .into(),
+        );
+        return Ok("Cookie set".to_string());
+    } else {
+        return Ok(format!("Cookie: {}", cookie.unwrap()));
+    }
 }
